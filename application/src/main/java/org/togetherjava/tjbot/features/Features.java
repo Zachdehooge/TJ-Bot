@@ -6,10 +6,12 @@ import org.togetherjava.tjbot.config.Config;
 import org.togetherjava.tjbot.config.FeatureBlacklist;
 import org.togetherjava.tjbot.config.FeatureBlacklistConfig;
 import org.togetherjava.tjbot.db.Database;
+import org.togetherjava.tjbot.features.analytics.EmojiTrackerListener;
+import org.togetherjava.tjbot.features.analytics.Metrics;
 import org.togetherjava.tjbot.features.basic.MemberCountDisplayRoutine;
 import org.togetherjava.tjbot.features.basic.PingCommand;
+import org.togetherjava.tjbot.features.basic.QuoteBoardForwarder;
 import org.togetherjava.tjbot.features.basic.RoleSelectCommand;
-import org.togetherjava.tjbot.features.basic.SlashCommandEducator;
 import org.togetherjava.tjbot.features.basic.SuggestionsUpDownVoter;
 import org.togetherjava.tjbot.features.bookmarks.BookmarksCommand;
 import org.togetherjava.tjbot.features.bookmarks.BookmarksSystem;
@@ -17,6 +19,8 @@ import org.togetherjava.tjbot.features.bookmarks.LeftoverBookmarksCleanupRoutine
 import org.togetherjava.tjbot.features.bookmarks.LeftoverBookmarksListener;
 import org.togetherjava.tjbot.features.chatgpt.ChatGptCommand;
 import org.togetherjava.tjbot.features.chatgpt.ChatGptService;
+import org.togetherjava.tjbot.features.chatgpt.tools.web.FetchUrlTool;
+import org.togetherjava.tjbot.features.chatgpt.tools.web.WebSearchTool;
 import org.togetherjava.tjbot.features.code.CodeMessageAutoDetection;
 import org.togetherjava.tjbot.features.code.CodeMessageHandler;
 import org.togetherjava.tjbot.features.code.CodeMessageManualDetection;
@@ -39,6 +43,8 @@ import org.togetherjava.tjbot.features.jshell.JShellEval;
 import org.togetherjava.tjbot.features.mathcommands.TeXCommand;
 import org.togetherjava.tjbot.features.mathcommands.wolframalpha.WolframAlphaCommand;
 import org.togetherjava.tjbot.features.mediaonly.MediaOnlyChannelListener;
+import org.togetherjava.tjbot.features.messages.MessageCommand;
+import org.togetherjava.tjbot.features.messages.RewriteCommand;
 import org.togetherjava.tjbot.features.moderation.BanCommand;
 import org.togetherjava.tjbot.features.moderation.KickCommand;
 import org.togetherjava.tjbot.features.moderation.ModerationActionsStore;
@@ -63,8 +69,11 @@ import org.togetherjava.tjbot.features.moderation.scam.ScamHistoryPurgeRoutine;
 import org.togetherjava.tjbot.features.moderation.scam.ScamHistoryStore;
 import org.togetherjava.tjbot.features.moderation.temp.TemporaryModerationRoutine;
 import org.togetherjava.tjbot.features.projects.ProjectsThreadCreatedListener;
+import org.togetherjava.tjbot.features.purge.PurgeCommand;
+import org.togetherjava.tjbot.features.purge.PurgeMessagesByUserCommand;
 import org.togetherjava.tjbot.features.reminder.RemindRoutine;
 import org.togetherjava.tjbot.features.reminder.ReminderCommand;
+import org.togetherjava.tjbot.features.roleapplication.CreateRoleApplicationCommand;
 import org.togetherjava.tjbot.features.rss.RSSHandlerRoutine;
 import org.togetherjava.tjbot.features.system.BotCore;
 import org.togetherjava.tjbot.features.system.LogLevelCommand;
@@ -77,9 +86,11 @@ import org.togetherjava.tjbot.features.tophelper.TopHelpersCommand;
 import org.togetherjava.tjbot.features.tophelper.TopHelpersMessageListener;
 import org.togetherjava.tjbot.features.tophelper.TopHelpersPurgeMessagesRoutine;
 import org.togetherjava.tjbot.features.tophelper.TopHelpersService;
+import org.togetherjava.tjbot.features.voicechat.DynamicVoiceChat;
 
 import java.util.ArrayList;
 import java.util.Collection;
+import java.util.List;
 
 /**
  * Utility class that offers all features that should be registered by the system, such as commands.
@@ -87,7 +98,7 @@ import java.util.Collection;
  * it with the system.
  * <p>
  * To add a new slash command, extend the commands returned by
- * {@link #createFeatures(JDA, Database, Config)}.
+ * {@link #createFeatures(JDA, Database, Config, Metrics)}.
  */
 public class Features {
     private Features() {
@@ -103,9 +114,12 @@ public class Features {
      * @param jda the JDA instance commands will be registered at
      * @param database the database of the application, which features can use to persist data
      * @param config the configuration features should use
+     * @param metrics the metrics service for tracking analytics
      * @return a collection of all features
      */
-    public static Collection<Feature> createFeatures(JDA jda, Database database, Config config) {
+    @SuppressWarnings("unused")
+    public static Collection<Feature> createFeatures(JDA jda, Database database, Config config,
+            Metrics metrics) {
         FeatureBlacklistConfig blacklistConfig = config.getFeatureBlacklistConfig();
         JShellEval jshellEval = new JShellEval(config.getJshell(), config.getGitHubApiKey());
 
@@ -114,16 +128,18 @@ public class Features {
         ModerationActionsStore actionsStore = new ModerationActionsStore(database);
         ModAuditLogWriter modAuditLogWriter = new ModAuditLogWriter(config);
         ScamHistoryStore scamHistoryStore = new ScamHistoryStore(database);
-        GitHubReference githubReference = new GitHubReference(config);
+        GitHubReference githubReference = new GitHubReference(config, metrics);
         CodeMessageHandler codeMessageHandler =
-                new CodeMessageHandler(blacklistConfig.special(), jshellEval);
-        ChatGptService chatGptService = new ChatGptService(config);
+                new CodeMessageHandler(blacklistConfig.special(), jshellEval, metrics);
+        ChatGptService chatGptService = new ChatGptService(config, metrics);
         HelpSystemHelper helpSystemHelper = new HelpSystemHelper(config, database, chatGptService);
         HelpThreadLifecycleListener helpThreadLifecycleListener =
                 new HelpThreadLifecycleListener(helpSystemHelper, database);
+        HelpThreadCreatedListener helpThreadCreatedListener =
+                new HelpThreadCreatedListener(helpSystemHelper, metrics);
         TopHelpersService topHelpersService = new TopHelpersService(database);
         TopHelpersAssignmentRoutine topHelpersAssignmentRoutine =
-                new TopHelpersAssignmentRoutine(config, topHelpersService);
+                new TopHelpersAssignmentRoutine(config, topHelpersService, metrics);
 
         // NOTE The system can add special system relevant commands also by itself,
         // hence this list may not necessarily represent the full list of all commands actually
@@ -138,34 +154,38 @@ public class Features {
         features.add(new ScamHistoryPurgeRoutine(scamHistoryStore));
         features.add(new HelpThreadMetadataPurger(database));
         features.add(new HelpThreadActivityUpdater(helpSystemHelper));
-        features
-            .add(new AutoPruneHelperRoutine(config, helpSystemHelper, modAuditLogWriter, database));
+        features.add(new AutoPruneHelperRoutine(config, helpSystemHelper, modAuditLogWriter,
+                database, metrics));
         features.add(new HelpThreadAutoArchiver(helpSystemHelper));
         features.add(new LeftoverBookmarksCleanupRoutine(bookmarksSystem));
         features.add(new MarkHelpThreadCloseInDBRoutine(database, helpThreadLifecycleListener));
         features.add(new MemberCountDisplayRoutine(config));
-        features.add(new RSSHandlerRoutine(config, database));
+        features.add(new RSSHandlerRoutine(config, database, metrics));
         features.add(topHelpersAssignmentRoutine);
 
         // Message receivers
         features.add(new TopHelpersMessageListener(database, config));
-        features.add(new SuggestionsUpDownVoter(config));
-        features.add(new ScamBlocker(actionsStore, scamHistoryStore, config));
-        features.add(new MediaOnlyChannelListener(config));
-        features.add(new FileSharingMessageListener(config));
-        features.add(new BlacklistedAttachmentListener(config, modAuditLogWriter));
+        features.add(new SuggestionsUpDownVoter(config, metrics));
+        features.add(new EmojiTrackerListener(metrics));
+        features.add(new ScamBlocker(actionsStore, scamHistoryStore, config, metrics));
+        features.add(new MediaOnlyChannelListener(config, metrics));
+        features.add(new FileSharingMessageListener(config, metrics));
+        features.add(new BlacklistedAttachmentListener(config, modAuditLogWriter, metrics));
         features.add(githubReference);
         features.add(codeMessageHandler);
         features.add(new CodeMessageAutoDetection(config, codeMessageHandler));
         features.add(new CodeMessageManualDetection(codeMessageHandler));
-        features.add(new SlashCommandEducator());
         features.add(new PinnedNotificationRemover(config));
+        features.add(new QuoteBoardForwarder(config));
+
+        // Voice receivers
+        features.add(new DynamicVoiceChat(config, metrics));
 
         // Event receivers
-        features.add(new RejoinModerationRoleListener(actionsStore, config));
-        features.add(new GuildLeaveCloseThreadListener(config));
+        features.add(new RejoinModerationRoleListener(actionsStore, config, metrics));
+        features.add(new GuildLeaveCloseThreadListener(config, metrics));
         features.add(new LeftoverBookmarksListener(bookmarksSystem));
-        features.add(new HelpThreadCreatedListener(helpSystemHelper));
+        features.add(helpThreadCreatedListener);
         features.add(new HelpThreadLifecycleListener(helpSystemHelper, database));
         features.add(new ProjectsThreadCreatedListener(config));
 
@@ -178,7 +198,7 @@ public class Features {
         features.add(new LogLevelCommand());
         features.add(new PingCommand());
         features.add(new TeXCommand());
-        features.add(new TagCommand(tagSystem));
+        features.add(new TagCommand(tagSystem, metrics));
         features.add(new TagManageCommand(tagSystem, modAuditLogWriter));
         features.add(new TagsCommand(tagSystem));
         features.add(new WarnCommand(actionsStore));
@@ -198,11 +218,19 @@ public class Features {
         features.add(new WolframAlphaCommand(config));
         features.add(new GitHubCommand(githubReference));
         features.add(new ModMailCommand(jda, config));
-        features.add(new HelpThreadCommand(config, helpSystemHelper));
+        features.add(new HelpThreadCommand(config, helpSystemHelper, metrics));
         features.add(new ReportCommand(config));
         features.add(new BookmarksCommand(bookmarksSystem));
-        features.add(new ChatGptCommand(chatGptService, helpSystemHelper));
+
+        features.add(new ChatGptCommand(chatGptService, helpSystemHelper,
+                List.of(new WebSearchTool(config.getTavilyApiKey()), new FetchUrlTool())));
+
         features.add(new JShellCommand(jshellEval));
+        features.add(new MessageCommand());
+        features.add(new RewriteCommand(chatGptService));
+        features.add(new CreateRoleApplicationCommand(config));
+        features.add(new PurgeCommand(modAuditLogWriter));
+        features.add(new PurgeMessagesByUserCommand(modAuditLogWriter));
 
         FeatureBlacklist<Class<?>> blacklist = blacklistConfig.normal();
         return blacklist.filterStream(features.stream(), Object::getClass).toList();

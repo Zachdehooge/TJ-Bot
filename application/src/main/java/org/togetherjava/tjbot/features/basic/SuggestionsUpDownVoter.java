@@ -13,6 +13,7 @@ import org.slf4j.LoggerFactory;
 import org.togetherjava.tjbot.config.Config;
 import org.togetherjava.tjbot.config.SuggestionsConfig;
 import org.togetherjava.tjbot.features.MessageReceiverAdapter;
+import org.togetherjava.tjbot.features.analytics.Metrics;
 
 import java.util.Optional;
 import java.util.regex.Pattern;
@@ -28,16 +29,19 @@ public final class SuggestionsUpDownVoter extends MessageReceiverAdapter {
     private static final int THREAD_TITLE_MAX_LENGTH = 60;
 
     private final SuggestionsConfig config;
+    private final Metrics metrics;
 
     /**
      * Creates a new listener to receive all message sent in suggestion channels.
      *
      * @param config the config to use for this
+     * @param metrics to track events
      */
-    public SuggestionsUpDownVoter(Config config) {
+    public SuggestionsUpDownVoter(Config config, Metrics metrics) {
         super(Pattern.compile(config.getSuggestions().getChannelPattern()));
 
         this.config = config.getSuggestions();
+        this.metrics = metrics;
     }
 
     @Override
@@ -49,14 +53,24 @@ public final class SuggestionsUpDownVoter extends MessageReceiverAdapter {
         Guild guild = event.getGuild();
         Message message = event.getMessage();
 
+        metrics.count("suggestion");
         createThread(message);
+
         reactWith(config.getUpVoteEmoteName(), FALLBACK_UP_VOTE, guild, message);
         reactWith(config.getDownVoteEmoteName(), FALLBACK_DOWN_VOTE, guild, message);
     }
 
     private static void createThread(Message message) {
         String threadTitle = generateThreadTitle(message);
-        message.createThreadChannel(threadTitle).queue();
+        message.createThreadChannel(threadTitle).queue(_ -> {
+        }, exception -> {
+            if (exception instanceof ErrorResponseException responseException
+                    && responseException.getErrorResponse() == ErrorResponse.UNKNOWN_MESSAGE) {
+                logger.info("Failed to start suggestion thread: source message deleted");
+                return;
+
+            }
+        });
     }
 
     /**
@@ -91,18 +105,24 @@ public final class SuggestionsUpDownVoter extends MessageReceiverAdapter {
                     "Unable to vote on a suggestion with the configured emoji ('{}'), using fallback instead.",
                     emojiName);
             return message.addReaction(fallbackEmoji);
-        }).queue(ignored -> {
-        }, exception -> {
-            if (exception instanceof ErrorResponseException responseException
-                    && responseException.getErrorResponse() == ErrorResponse.REACTION_BLOCKED) {
+        }).queue(_ -> {
+        }, SuggestionsUpDownVoter::handleReactionFailure);
+    }
+
+    private static void handleReactionFailure(Throwable exception) {
+        if (exception instanceof ErrorResponseException responseException) {
+            if (responseException.getErrorResponse() == ErrorResponse.REACTION_BLOCKED) {
                 // User blocked the bot, hence the bot can not add reactions to their messages.
-                // Nothing we can do here.
                 return;
             }
-
-            logger.error("Attempted to react to a suggestion, but failed", exception);
-        });
+            if (responseException.getErrorResponse() == ErrorResponse.UNKNOWN_MESSAGE) {
+                logger.info("Failed to react to suggestion: source message deleted");
+                return;
+            }
+        }
+        logger.error("Attempted to react to a suggestion, but failed", exception);
     }
+
 
     private static Optional<RichCustomEmoji> getEmojiByName(String name, Guild guild) {
         return guild.getEmojisByName(name, false).stream().findAny();

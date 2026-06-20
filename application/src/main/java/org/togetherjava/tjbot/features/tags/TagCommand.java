@@ -18,6 +18,7 @@ import net.dv8tion.jda.api.utils.messages.MessageEditBuilder;
 
 import org.togetherjava.tjbot.features.CommandVisibility;
 import org.togetherjava.tjbot.features.SlashCommandAdapter;
+import org.togetherjava.tjbot.features.analytics.Metrics;
 import org.togetherjava.tjbot.features.utils.LinkDetection;
 import org.togetherjava.tjbot.features.utils.LinkPreview;
 import org.togetherjava.tjbot.features.utils.LinkPreviews;
@@ -27,6 +28,7 @@ import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
@@ -40,6 +42,7 @@ import java.util.Set;
  */
 public final class TagCommand extends SlashCommandAdapter {
     private final TagSystem tagSystem;
+    private final Metrics metrics;
     private static final int MAX_SUGGESTIONS = 5;
     static final String ID_OPTION = "id";
     static final String REPLY_TO_USER_OPTION = "reply-to";
@@ -48,11 +51,13 @@ public final class TagCommand extends SlashCommandAdapter {
      * Creates a new instance, using the given tag system as base.
      *
      * @param tagSystem the system providing the actual tag data
+     * @param metrics to track events
      */
-    public TagCommand(TagSystem tagSystem) {
+    public TagCommand(TagSystem tagSystem, Metrics metrics) {
         super("tag", "Display a tags content", CommandVisibility.GUILD);
 
         this.tagSystem = tagSystem;
+        this.metrics = metrics;
 
         getData().addOptions(
                 new OptionData(OptionType.STRING, ID_OPTION, "The id of the tag to display", true,
@@ -87,6 +92,8 @@ public final class TagCommand extends SlashCommandAdapter {
         if (tagSystem.handleIsUnknownTag(id, event)) {
             return;
         }
+        metrics.count("tag", Map.of("id", id, "user", event.getUser().getName(), "userId",
+                event.getUser().getIdLong()));
 
         String tagContent = tagSystem.getTag(id).orElseThrow();
         MessageEmbed contentEmbed = new EmbedBuilder().setDescription(tagContent)

@@ -19,10 +19,10 @@ import net.dv8tion.jda.api.events.interaction.component.StringSelectInteractionE
 import net.dv8tion.jda.api.events.message.MessageDeleteEvent;
 import net.dv8tion.jda.api.events.message.MessageReceivedEvent;
 import net.dv8tion.jda.api.events.message.MessageUpdateEvent;
+import net.dv8tion.jda.api.events.message.react.MessageReactionAddEvent;
 import net.dv8tion.jda.api.hooks.ListenerAdapter;
 import net.dv8tion.jda.api.interactions.callbacks.IReplyCallback;
 import net.dv8tion.jda.api.interactions.components.ComponentInteraction;
-import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 import org.jetbrains.annotations.Unmodifiable;
 import org.slf4j.Logger;
@@ -41,6 +41,7 @@ import org.togetherjava.tjbot.features.UserContextCommand;
 import org.togetherjava.tjbot.features.UserInteractionType;
 import org.togetherjava.tjbot.features.UserInteractor;
 import org.togetherjava.tjbot.features.VoiceReceiver;
+import org.togetherjava.tjbot.features.analytics.Metrics;
 import org.togetherjava.tjbot.features.componentids.ComponentId;
 import org.togetherjava.tjbot.features.componentids.ComponentIdParser;
 import org.togetherjava.tjbot.features.componentids.ComponentIdStore;
@@ -78,13 +79,13 @@ public final class BotCore extends ListenerAdapter implements CommandProvider {
     private static final ExecutorService COMMAND_SERVICE = Executors.newCachedThreadPool();
     private static final ScheduledExecutorService ROUTINE_SERVICE =
             Executors.newScheduledThreadPool(5);
-    private final Config config;
     private final Map<String, UserInteractor> prefixedNameToInteractor;
     private final List<Routine> routines;
     private final ComponentIdParser componentIdParser;
     private final ComponentIdStore componentIdStore;
     private final Map<Pattern, MessageReceiver> channelNameToMessageReceiver = new HashMap<>();
     private final Map<Pattern, VoiceReceiver> channelNameToVoiceReceiver = new HashMap<>();
+    private final Metrics metrics;
 
     /**
      * Creates a new command system which uses the given database to allow commands to persist data.
@@ -94,10 +95,11 @@ public final class BotCore extends ListenerAdapter implements CommandProvider {
      * @param jda the JDA instance that this command system will be used with
      * @param database the database that commands may use to persist data
      * @param config the configuration to use for this system
+     * @param metrics the metrics service for tracking analytics
      */
-    public BotCore(JDA jda, Database database, Config config) {
-        this.config = config;
-        Collection<Feature> features = Features.createFeatures(jda, database, config);
+    public BotCore(JDA jda, Database database, Config config, Metrics metrics) {
+        this.metrics = metrics;
+        Collection<Feature> features = Features.createFeatures(jda, database, config, metrics);
 
         // Message receivers
         features.stream()
@@ -255,6 +257,14 @@ public final class BotCore extends ListenerAdapter implements CommandProvider {
         }
     }
 
+    @Override
+    public void onMessageReactionAdd(final MessageReactionAddEvent event) {
+        if (event.isFromGuild()) {
+            getMessageReceiversSubscribedTo(event.getChannel())
+                .forEach(messageReceiver -> messageReceiver.onMessageReactionAdd(event));
+        }
+    }
+
     /**
      * Calculates the correct voice channel to act upon.
      *
@@ -291,14 +301,14 @@ public final class BotCore extends ListenerAdapter implements CommandProvider {
     }
 
     @Override
-    public void onGuildVoiceUpdate(@NotNull GuildVoiceUpdateEvent event) {
+    public void onGuildVoiceUpdate(GuildVoiceUpdateEvent event) {
         selectPreferredAudioChannel(event.getChannelJoined(), event.getChannelLeft())
             .ifPresent(channel -> getVoiceReceiversSubscribedTo(channel)
                 .forEach(voiceReceiver -> voiceReceiver.onVoiceUpdate(event)));
     }
 
     @Override
-    public void onGuildVoiceVideo(@NotNull GuildVoiceVideoEvent event) {
+    public void onGuildVoiceVideo(GuildVoiceVideoEvent event) {
         AudioChannelUnion channel = event.getVoiceState().getChannel();
 
         if (channel == null) {
@@ -310,7 +320,7 @@ public final class BotCore extends ListenerAdapter implements CommandProvider {
     }
 
     @Override
-    public void onGuildVoiceStream(@NotNull GuildVoiceStreamEvent event) {
+    public void onGuildVoiceStream(GuildVoiceStreamEvent event) {
         AudioChannelUnion channel = event.getVoiceState().getChannel();
 
         if (channel == null) {
@@ -322,7 +332,7 @@ public final class BotCore extends ListenerAdapter implements CommandProvider {
     }
 
     @Override
-    public void onGuildVoiceMute(@NotNull GuildVoiceMuteEvent event) {
+    public void onGuildVoiceMute(GuildVoiceMuteEvent event) {
         AudioChannelUnion channel = event.getVoiceState().getChannel();
 
         if (channel == null) {
@@ -334,7 +344,7 @@ public final class BotCore extends ListenerAdapter implements CommandProvider {
     }
 
     @Override
-    public void onGuildVoiceDeafen(@NotNull GuildVoiceDeafenEvent event) {
+    public void onGuildVoiceDeafen(GuildVoiceDeafenEvent event) {
         AudioChannelUnion channel = event.getVoiceState().getChannel();
 
         if (channel == null) {
@@ -371,10 +381,23 @@ public final class BotCore extends ListenerAdapter implements CommandProvider {
 
         logger.debug("Received slash command '{}' (#{}) on guild '{}'", name, event.getId(),
                 event.getGuild());
-        COMMAND_SERVICE.execute(
-                () -> requireUserInteractor(UserInteractionType.SLASH_COMMAND.getPrefixedName(name),
-                        SlashCommand.class)
-                    .onSlashCommand(event));
+        COMMAND_SERVICE.execute(() -> {
+            SlashCommand interactor = requireUserInteractor(
+                    UserInteractionType.SLASH_COMMAND.getPrefixedName(name), SlashCommand.class);
+
+            Map<String, Object> dimensions = new HashMap<>();
+            dimensions.put("name", name);
+            dimensions.put("user", event.getUser().getName());
+            dimensions.put("userId", event.getUser().getIdLong());
+
+            if (event.getSubcommandName() != null) {
+                dimensions.put("subCommandName", event.getSubcommandName());
+            }
+
+            metrics.count("slash", dimensions);
+
+            interactor.onSlashCommand(event);
+        });
     }
 
     @Override
@@ -441,10 +464,13 @@ public final class BotCore extends ListenerAdapter implements CommandProvider {
 
         logger.debug("Received message context command '{}' (#{}) on guild '{}'", name,
                 event.getId(), event.getGuild());
-        COMMAND_SERVICE.execute(() -> requireUserInteractor(
-                UserInteractionType.MESSAGE_CONTEXT_COMMAND.getPrefixedName(name),
-                MessageContextCommand.class)
-            .onMessageContext(event));
+        COMMAND_SERVICE.execute(() -> {
+            MessageContextCommand userInteractor = requireUserInteractor(
+                    UserInteractionType.MESSAGE_CONTEXT_COMMAND.getPrefixedName(name),
+                    MessageContextCommand.class);
+            metrics.count("msg_ctx-" + name);
+            userInteractor.onMessageContext(event);
+        });
     }
 
     @Override
@@ -453,10 +479,13 @@ public final class BotCore extends ListenerAdapter implements CommandProvider {
 
         logger.debug("Received user context command '{}' (#{}) on guild '{}'", name, event.getId(),
                 event.getGuild());
-        COMMAND_SERVICE.execute(() -> requireUserInteractor(
-                UserInteractionType.USER_CONTEXT_COMMAND.getPrefixedName(name),
-                UserContextCommand.class)
-            .onUserContext(event));
+        COMMAND_SERVICE.execute(() -> {
+            UserContextCommand userInteractor = requireUserInteractor(
+                    UserInteractionType.USER_CONTEXT_COMMAND.getPrefixedName(name),
+                    UserContextCommand.class);
+            metrics.count("user_ctx-" + name);
+            userInteractor.onUserContext(event);
+        });
     }
 
     /**

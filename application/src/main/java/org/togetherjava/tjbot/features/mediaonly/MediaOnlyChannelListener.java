@@ -11,8 +11,10 @@ import net.dv8tion.jda.api.utils.messages.MessageCreateData;
 
 import org.togetherjava.tjbot.config.Config;
 import org.togetherjava.tjbot.features.MessageReceiverAdapter;
+import org.togetherjava.tjbot.features.analytics.Metrics;
 
 import java.awt.Color;
+import java.util.List;
 import java.util.concurrent.TimeUnit;
 import java.util.regex.Pattern;
 
@@ -25,13 +27,18 @@ import java.util.regex.Pattern;
  */
 public final class MediaOnlyChannelListener extends MessageReceiverAdapter {
 
+    private final Metrics metrics;
+
     /**
      * Creates a MediaOnlyChannelListener to receive all message sent in MediaOnly channel.
      *
      * @param config to find MediaOnly channels
+     * @param metrics metrics
      */
-    public MediaOnlyChannelListener(Config config) {
+    public MediaOnlyChannelListener(Config config, Metrics metrics) {
         super(Pattern.compile(config.getMediaOnlyChannelPattern()));
+
+        this.metrics = metrics;
     }
 
     @Override
@@ -46,14 +53,58 @@ public final class MediaOnlyChannelListener extends MessageReceiverAdapter {
         }
 
         if (messageHasNoMediaAttached(message)) {
+            metrics.count("media_only_channel-msg_deleted");
             message.delete().flatMap(_ -> dmUser(message)).queue(_ -> {
             }, failure -> tempNotifyUserInChannel(message));
         }
     }
 
+    /**
+     * Checks whether the given message has no media attached.
+     * <p>
+     * A message is considered to have media if it contains attachments, embeds, or a URL in its
+     * text content. For forwarded messages, the snapshots are also checked for media.
+     *
+     * @param message the message to check
+     * @return {@code true} if the message has no media, {@code false} otherwise
+     */
     private boolean messageHasNoMediaAttached(Message message) {
-        return message.getAttachments().isEmpty() && message.getEmbeds().isEmpty()
-                && !message.getContentRaw().contains("http");
+        if (hasMedia(message.getAttachments(), message.getEmbeds(), message.getContentRaw())) {
+            return false;
+        }
+
+        return message.getMessageSnapshots()
+            .stream()
+            .noneMatch(snapshot -> hasMedia(snapshot.getAttachments(), snapshot.getEmbeds(),
+                    snapshot.getContentRaw()));
+    }
+
+    /**
+     * Checks whether the given content contains any media.
+     * <p>
+     * Media is considered present if there are attachments, embeds, or a URL (identified by
+     * {@code "http"}) in the text content.
+     *
+     * @param attachments the attachments of the message or snapshot
+     * @param embeds the embeds of the message or snapshot
+     * @param content the raw text content of the message or snapshot
+     */
+    private boolean hasMedia(List<Message.Attachment> attachments, List<MessageEmbed> embeds,
+            String content) {
+        return !attachments.isEmpty() || !embeds.isEmpty() || content.contains("http");
+    }
+
+    private RestAction<Message> dmUser(Message message) {
+        return message.getAuthor()
+            .openPrivateChannel()
+            .flatMap(channel -> channel.sendMessage(createNotificationMessage(message)));
+    }
+
+    private void tempNotifyUserInChannel(Message message) {
+        message.getChannel()
+            .sendMessage(createNotificationMessage(message))
+            .queue(notificationMessage -> notificationMessage.delete()
+                .queueAfter(1, TimeUnit.MINUTES));
     }
 
     private MessageCreateData createNotificationMessage(Message message) {
@@ -68,18 +119,5 @@ public final class MediaOnlyChannelListener extends MessageReceiverAdapter {
                 + " Hey there, you posted a message without media (image, video, link) in a media-only channel. Please see the description of the channel for details and then repost with media attached, thanks 😀")
             .setEmbeds(originalMessageEmbed)
             .build();
-    }
-
-    private RestAction<Message> dmUser(Message message) {
-        return message.getAuthor()
-            .openPrivateChannel()
-            .flatMap(channel -> channel.sendMessage(createNotificationMessage(message)));
-    }
-
-    private void tempNotifyUserInChannel(Message message) {
-        message.getChannel()
-            .sendMessage(createNotificationMessage(message))
-            .queue(notificationMessage -> notificationMessage.delete()
-                .queueAfter(1, TimeUnit.MINUTES));
     }
 }

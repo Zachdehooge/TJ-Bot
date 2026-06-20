@@ -48,7 +48,11 @@ public final class Config {
     private final RSSFeedsConfig rssFeedsConfig;
     private final String selectRolesChannelPattern;
     private final String memberCountCategoryPattern;
+    private final RoleApplicationSystemConfig roleApplicationSystemConfig;
+    private final QuoteBoardConfig quoteBoardConfig;
     private final TopHelpersConfig topHelpers;
+    private final DynamicVoiceChatConfig dynamicVoiceChatConfig;
+    private final String tavilyApiKey;
 
     @SuppressWarnings("ConstructorWithTooManyParameters")
     @JsonCreator(mode = JsonCreator.Mode.PROPERTIES)
@@ -102,7 +106,14 @@ public final class Config {
             @JsonProperty(value = "rssConfig", required = true) RSSFeedsConfig rssFeedsConfig,
             @JsonProperty(value = "selectRolesChannelPattern",
                     required = true) String selectRolesChannelPattern,
-            @JsonProperty(value = "topHelpers", required = true) TopHelpersConfig topHelpers) {
+            @JsonProperty(value = "quoteBoardConfig",
+                    required = true) QuoteBoardConfig quoteBoardConfig,
+            @JsonProperty(value = "roleApplicationSystem",
+                    required = true) RoleApplicationSystemConfig roleApplicationSystemConfig,
+            @JsonProperty(value = "topHelpers", required = true) TopHelpersConfig topHelpers,
+            @JsonProperty(value = "dynamicVoiceChatConfig",
+                    required = true) DynamicVoiceChatConfig dynamicVoiceChatConfig,
+            @JsonProperty(value = "tavilyApiKey", required = true) String tavilyApiKey) {
         this.token = Objects.requireNonNull(token);
         this.githubApiKey = Objects.requireNonNull(githubApiKey);
         this.databasePath = Objects.requireNonNull(databasePath);
@@ -137,7 +148,11 @@ public final class Config {
         this.featureBlacklistConfig = Objects.requireNonNull(featureBlacklistConfig);
         this.rssFeedsConfig = Objects.requireNonNull(rssFeedsConfig);
         this.selectRolesChannelPattern = Objects.requireNonNull(selectRolesChannelPattern);
+        this.quoteBoardConfig = Objects.requireNonNull(quoteBoardConfig);
+        this.roleApplicationSystemConfig = roleApplicationSystemConfig;
         this.topHelpers = Objects.requireNonNull(topHelpers);
+        this.dynamicVoiceChatConfig = Objects.requireNonNull(dynamicVoiceChatConfig);
+        this.tavilyApiKey = Objects.requireNonNull(tavilyApiKey);
     }
 
     /**
@@ -432,12 +447,33 @@ public final class Config {
     }
 
     /**
+     * The configuration of the quote messages config.
+     *
+     * <p>
+     * >The configuration of the quote board feature. Quotes user selected messages.
+     *
+     * @return configuration of quote messages config
+     */
+    public QuoteBoardConfig getQuoteBoardConfig() {
+        return quoteBoardConfig;
+    }
+
+    /**
      * Gets the pattern matching the category that is used to display the total member count.
      *
      * @return the categories name types
      */
     public String getMemberCountCategoryPattern() {
         return memberCountCategoryPattern;
+    }
+
+    /**
+     * The configuration related to the application form.
+     *
+     * @return the application form config
+     */
+    public RoleApplicationSystemConfig getRoleApplicationSystemConfig() {
+        return roleApplicationSystemConfig;
     }
 
     /**
@@ -456,5 +492,26 @@ public final class Config {
      */
     public TopHelpersConfig getTopHelpers() {
         return topHelpers;
+    }
+
+    /**
+     * Gets the dynamic voice chat configuration
+     *
+     * @return the dynamic voice chat configuration
+     */
+    public DynamicVoiceChatConfig getDynamicVoiceChatConfig() {
+        return dynamicVoiceChatConfig;
+    }
+
+    /**
+     * Gets the API key for Tavily ({@link <a href="https://www.tavily.com">tavily.com</a>}), a
+     * search engine API tailored for LLMs. It is used by the ChatGPT command to power the AI-driven
+     * web search tool, allowing the assistant to fetch up-to-date information from the web when
+     * answering user questions.
+     *
+     * @return the Tavily API key
+     */
+    public String getTavilyApiKey() {
+        return tavilyApiKey;
     }
 }
